@@ -1,4 +1,4 @@
-name: Build iOS 15 WebKit (manual)
+name: Build iOS 15 WebKit
 
 on:
   workflow_dispatch:
@@ -6,29 +6,52 @@ on:
 jobs:
   build:
     runs-on: macos-14
+    timeout-minutes: 360
     steps:
-      - name: Checkout repo
+      - name: Checkout patch repo
         uses: actions/checkout@v4
 
-      - name: Select Xcode 15.4
+      - name: Select Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_15.4.app
+          sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app || true
+          xcodebuild -version
 
-      - name: Fetch WebKit source
-        run: |
-          git clone --depth 1 --branch releases/Apple/Safari-15-iOS-15.0 https://github.com/WebKit/WebKit.git WebKit-15.0
+      - name: Clone matching WebKit tag
+        run: git clone --depth 1 --branch releases/Apple/Safari-15-iOS-15.0 https://github.com/WebKit/WebKit.git WebKit-15.0
 
-      - name: Copy shims and apply patch
-        run: |
-          cp -R scripts WebKit-15.0/
-          git -C WebKit-15.0 apply ../ios15-port.patch
+      - name: Copy ABI shims
+        run: cp -R scripts WebKit-15.0/
 
-      - name: Build WebKit (device)
+      - name: Apply iOS 15 port patch
+        run: git -C WebKit-15.0 apply ../ios15-port.patch
+
+      - name: Build WebKit for iOS device
+        working-directory: WebKit-15.0
+        env:
+          WK_USE_CCACHE: "YES"
         run: |
-          cd WebKit-15.0
-          Tools/Scripts/build-webkit --ios-device --release --use-ccache \
-            WK_USE_CCACHE=YES \
-            ARCHS='arm64 arm64e' \
-            GCC_TREAT_WARNINGS_AS_ERRORS=NO \
+          export PERL5LIB="$PWD/Tools/Scripts:$PWD/Tools:$PERL5LIB"
+
+          
+          echo "Listing Tools/Scripts for debugging"
+          ls -la Tools/Scripts | sed -n '1,200p' || true
+          find Tools -maxdepth 3 -type f -name '*.pm' -print || true
+
+          export CODE_SIGNING_ALLOWED=NO
+          export CODE_SIGNING_REQUIRED=NO
+          export CODE_SIGN_IDENTITY=""
+          export DEVELOPMENT_TEAM=""
+
+          Tools/Scripts/build-webkit --ios-device --release --use-ccache WK_USE_CCACHE=YES \
+            ARCHS='arm64 arm64e' GCC_TREAT_WARNINGS_AS_ERRORS=NO \
             OTHER_CFLAGS='$(inherited) -Wno-error -Wno-error=strict-prototypes -Wno-strict-prototypes -Wno-error=deprecated-declarations' \
             OTHER_CPLUSPLUSFLAGS='$(inherited) -Wno-error -Wno-error=deprecated-declarations'
+
+      - name: Archive build products if present
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webkit-ios15-build-products
+          if-no-files-found: ignore
+          path: |
+            WebKit-15.0/WebKitBuild
